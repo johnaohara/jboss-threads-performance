@@ -21,4 +21,7 @@ ExecutorBenchmarks.benchmarkSubmit        8  REENTRANT_LOCK  thrpt    3   211775
 ExecutorBenchmarks.benchmarkSubmit       14        NO_LOCKS  thrpt    3  1112300.950 ± 103541.988  ops/s
 ExecutorBenchmarks.benchmarkSubmit       14       SPIN_LOCK  thrpt    3   204114.786 ±  38581.330  ops/s
 ExecutorBenchmarks.benchmarkSubmit       14  REENTRANT_LOCK  thrpt    3   208072.127 ±  33223.526  ops/s
+ExecutorBenchmarks.benchmarkSubmit       28        NO_LOCKS  thrpt    3  1257170.980 ± 196998.383  ops/s
+ExecutorBenchmarks.benchmarkSubmit       28       SPIN_LOCK  thrpt    3   202660.260 ±  46212.712  ops/s
+ExecutorBenchmarks.benchmarkSubmit       28  REENTRANT_LOCK  thrpt    3   201910.260 ±   1235.492  ops/s
 ```

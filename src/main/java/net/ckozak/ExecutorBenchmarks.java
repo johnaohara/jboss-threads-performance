@@ -32,7 +32,7 @@ public class ExecutorBenchmarks {
     @Param({"NO_LOCKS", "SPIN_LOCK", "REENTRANT_LOCK"})
     public LockMode lockMode;
 
-    @Param ({ "1", "2", "4", "8", "14" })
+    @Param ({ "1", "2", "4", "8", "14", "28" })
     public int cores;
 
     public enum LockMode {
