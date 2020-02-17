@@ -1,6 +1,10 @@
 package net.ckozak;
 
+import java.time.Duration;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import org.jboss.threads.EnhancedQueueExecutor;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -29,11 +33,40 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
         jvmArgs = {"-Xmx2g", "-Xms2g", "-XX:+UseParallelOldGC"})
 public class ExecutorBenchmarks {
 
-    @Param({"NO_LOCKS", "SPIN_LOCK", "REENTRANT_LOCK"})
-    public LockMode lockMode;
+    @Param({"THREAD_POOL_EXECUTOR", "EQE_NO_LOCKS", "EQE_SPIN_LOCK", "EQE_REENTRANT_LOCK"})
+    public ExecutorType factory;
 
     @Param ({ "1", "2", "4", "8", "14", "28" })
     public int cores;
+
+    public enum ExecutorType {
+        THREAD_POOL_EXECUTOR(LockMode.NO_LOCKS /* any value */),
+        EQE_NO_LOCKS(LockMode.NO_LOCKS),
+        EQE_SPIN_LOCK(LockMode.SPIN_LOCK),
+        EQE_REENTRANT_LOCK(LockMode.REENTRANT_LOCK);
+
+        private final LockMode mode;
+
+        ExecutorType(LockMode mode) {
+            this.mode = mode;
+        }
+
+        ExecutorService create() {
+            mode.install();
+            if (this == THREAD_POOL_EXECUTOR) {
+                return new ThreadPoolExecutor(100, 200,
+                        1L, TimeUnit.MINUTES,
+                        new LinkedBlockingQueue<>(),
+                        Executors.defaultThreadFactory());
+            }
+            return new EnhancedQueueExecutor.Builder()
+                    .setCorePoolSize(100)
+                    .setMaximumPoolSize(200)
+                    .setKeepAliveTime(Duration.ofMinutes(1))
+                    .setThreadFactory(Executors.defaultThreadFactory())
+                    .build();
+        }
+    }
 
     public enum LockMode {
         NO_LOCKS,
@@ -42,7 +75,6 @@ public class ExecutorBenchmarks {
 
         void install() {
             switch (this) {
-
                 case NO_LOCKS:
                     System.setProperty("jboss.threads.eqe.tail-lock", "false");
                     System.setProperty("jboss.threads.eqe.head-lock", "false");
@@ -59,24 +91,18 @@ public class ExecutorBenchmarks {
             }
         }
     }
-    private EnhancedQueueExecutor eqe;
+    private ExecutorService executor;
 
     @Setup
     public void setup() {
-        lockMode.install();
         CoreAffinity.useCores(cores);
-        eqe = new EnhancedQueueExecutor.Builder()
-                .setCorePoolSize(100)
-                .setMaximumPoolSize(200)
-                .setKeepAliveTime(1, TimeUnit.MINUTES)
-                .setThreadFactory(Executors.defaultThreadFactory())
-                .build();
+        executor = factory.create();
     }
 
     @TearDown
     public void tearDown() throws InterruptedException {
-        eqe.shutdownNow();
-        if (!eqe.awaitTermination(1, TimeUnit.SECONDS)) {
+        executor.shutdownNow();
+        if (!executor.awaitTermination(1, TimeUnit.SECONDS)) {
             throw new IllegalStateException("executor failed to teminate within 1 second");
         }
     }
@@ -86,7 +112,7 @@ public class ExecutorBenchmarks {
     @BenchmarkMode(Mode.Throughput)
     @OutputTimeUnit(TimeUnit.SECONDS)
     public void benchmarkSubmit(Blackhole blackhole) throws Exception {
-        eqe.submit(() -> blackhole.consume(Thread.currentThread().getId())).get();
+        executor.submit(() -> blackhole.consume(Thread.currentThread().getId())).get();
     }
 
     public static void main(String[] args) throws RunnerException {
