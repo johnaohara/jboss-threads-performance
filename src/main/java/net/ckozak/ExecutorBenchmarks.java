@@ -1,15 +1,9 @@
 package net.ckozak;
 
-import java.time.Duration;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.LongAdder;
-import java.util.concurrent.locks.LockSupport;
-
 import org.jboss.threads.EnhancedQueueExecutor;
+import org.jboss.threads.JBossExecutors;
+import org.jboss.threads.JBossThreadFactory;
+import org.jboss.threads.StripedEnhancedQueueExecutor;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -27,6 +21,15 @@ import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
+import java.time.Duration;
+import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.LinkedTransferQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
 @org.openjdk.jmh.annotations.State(Scope.Benchmark)
 @Measurement(iterations = 4, time = 7)
 @Warmup(iterations = 2, time = 7)
@@ -36,7 +39,9 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
         jvmArgs = {"-Xmx2g", "-Xms2g", "-XX:+UseParallelOldGC"})
 public class ExecutorBenchmarks {
 
-    @Param({"THREAD_POOL_EXECUTOR", "EQE_NO_LOCKS", "EQE_REENTRANT_LOCK", "EQE_SPIN_LOCK", "EQE_SYNCHRONIZED"})
+//    @Param({"THREAD_POOL_EXECUTOR_LBQ", "THREAD_POOL_EXECUTOR_LTQ", "EQE_NO_LOCKS", "EQE_REENTRANT_LOCK", "EQE_SPIN_LOCK", "EQE_SYNCHRONIZED"})
+    @Param({"THREAD_POOL_EXECUTOR_LBQ", "THREAD_POOL_EXECUTOR_LTQ", "EQE_NO_LOCKS", "EQE_REENTRANT_LOCK", "EQE_SPIN_LOCK"
+            , "EQE_SYNCHRONIZED", "SEQE_NO_LOCKS", "SEQE_REENTRANT_LOCK", "SEQE_SPIN_LOCK", "SEQE_SYNCHRONIZED"})
     public ExecutorType factory;
 
     @Param ({ "1", "2", "4", "8", "14", "28" })
@@ -45,17 +50,26 @@ public class ExecutorBenchmarks {
     @Param ({ "16,16", "100,200" })
     public String executorThreads;
 
+
     public enum ExecutorType {
-        THREAD_POOL_EXECUTOR(LockMode.NO_LOCKS /* any value */),
-        EQE_NO_LOCKS(LockMode.NO_LOCKS),
-        EQE_SYNCHRONIZED(LockMode.SYNCHRONIZED),
-        EQE_SPIN_LOCK(LockMode.SPIN_LOCK),
-        EQE_REENTRANT_LOCK(LockMode.REENTRANT_LOCK);
+        THREAD_POOL_EXECUTOR_LBQ(LockMode.SPIN_LOCK /* no configuration */, tfeLbqFactory),
+        THREAD_POOL_EXECUTOR_LTQ(LockMode.SPIN_LOCK /* no configuration */, tfeLtqFactory),
+        EQE_NO_LOCKS(LockMode.NO_LOCKS, eqeFactory),
+        EQE_SYNCHRONIZED(LockMode.SYNCHRONIZED, eqeFactory),
+        EQE_SPIN_LOCK(LockMode.SPIN_LOCK, eqeFactory),
+        EQE_REENTRANT_LOCK(LockMode.REENTRANT_LOCK, eqeFactory),
+        SEQE_NO_LOCKS(LockMode.NO_LOCKS, seqeFactory),
+        SEQE_SYNCHRONIZED(LockMode.SYNCHRONIZED, seqeFactory),
+        SEQE_SPIN_LOCK(LockMode.SPIN_LOCK, seqeFactory),
+        SEQE_REENTRANT_LOCK(LockMode.REENTRANT_LOCK, seqeFactory);
+        ;
 
         private final LockMode mode;
+        private final ExecutorFactory executorFactory;
 
-        ExecutorType(LockMode mode) {
+        ExecutorType(LockMode mode, ExecutorFactory executorFactory) {
             this.mode = mode;
+            this.executorFactory = executorFactory;
         }
 
         ExecutorService create(String executorThreads) {
@@ -66,18 +80,9 @@ public class ExecutorBenchmarks {
             }
             int coreThreads = Integer.parseInt(coreAndMax[0].trim());
             int maxThreads = Integer.parseInt(coreAndMax[1].trim());
-            if (this == THREAD_POOL_EXECUTOR) {
-                return new ThreadPoolExecutor(coreThreads, maxThreads,
-                        1L, TimeUnit.MINUTES,
-                        new LinkedBlockingQueue<>(),
-                        Executors.defaultThreadFactory());
-            }
-            return new EnhancedQueueExecutor.Builder()
-                    .setCorePoolSize(coreThreads)
-                    .setMaximumPoolSize(maxThreads)
-                    .setKeepAliveTime(Duration.ofMinutes(1))
-                    .setThreadFactory(Executors.defaultThreadFactory())
-                    .build();
+
+            return executorFactory.build(coreThreads, maxThreads);
+
         }
     }
 
@@ -138,4 +143,43 @@ public class ExecutorBenchmarks {
                 .build())
                 .run();
     }
+
+    interface ExecutorFactory {
+        ExecutorService build(int coreThreads, int maxThreads);
+    }
+
+    static ExecutorFactory tfeLbqFactory = (coreThreads, maxThreads) -> new ThreadPoolExecutor(coreThreads, maxThreads,
+            1L, TimeUnit.MINUTES,
+            new LinkedBlockingQueue<>(),
+            Executors.defaultThreadFactory());
+
+    static ExecutorFactory tfeLtqFactory = (coreThreads, maxThreads) -> new ThreadPoolExecutor(coreThreads, maxThreads,
+            1L, TimeUnit.MINUTES,
+            new LinkedTransferQueue<>(),
+            Executors.defaultThreadFactory());
+
+    static ExecutorFactory eqeFactory = (coreThreads, maxThreads) -> new EnhancedQueueExecutor.Builder()
+            .setRegisterMBean(false)
+            .setHandoffExecutor(JBossExecutors.rejectingExecutor())
+            .setThreadFactory(JBossExecutors.resettingThreadFactory(getThreadFactory()))
+            .setCorePoolSize(coreThreads)
+            .setMaximumPoolSize(maxThreads)
+            .setKeepAliveTime(Duration.ofMinutes(1))
+            .build();
+
+    static ExecutorFactory seqeFactory = (coreThreads, maxThreads) -> new StripedEnhancedQueueExecutor.Builder()
+            .setRegisterMBean(false)
+            .setHandoffExecutor(JBossExecutors.rejectingExecutor())
+            .setThreadFactory(JBossExecutors.resettingThreadFactory(getThreadFactory()))
+            .setCorePoolSize(coreThreads)
+            .setMaximumPoolSize(maxThreads)
+            .setKeepAliveTime(Duration.ofMinutes(1))
+            .build();
+
+    private static final JBossThreadFactory getThreadFactory(){
+        return new JBossThreadFactory(new ThreadGroup("executor"), Boolean.TRUE, null,
+                "executor-thread-%t", JBossExecutors.loggingExceptionHandler("org.jboss.executor.uncaught"), null);
+    }
+
+
 }
